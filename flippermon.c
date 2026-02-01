@@ -48,24 +48,27 @@ static void render_callback(Canvas* canvas, void* ctx) {
     furi_mutex_release(app->mutex);
 }
 
-// --- Hardware Hook: NFC Scavenge ---
 void scavenge_nfc(FlipperMonApp* app) {
-    // This triggers a haptic buzz and "levels up" the pet
-    notification_message(app->notify, &sequence_success);
-    app->pet.level++;
+    // Check if an NFC card is physically near the Flipper
+    if(furi_hal_nfc_detect(NULL, 100)) { 
+        app->pet.level++;
+        notification_message(app->notify, &sequence_success);
+    } else {
+        // Blink yellow if no card found
+        notification_message(app->notify, &sequence_blink_yellow_100);
+    }
 }
 
 // --- Hardware Hook: IR Attack ---
 void send_ir_attack(FlipperMonApp* app) {
-    // Corrected function for the current SDK
-    // We'll send a simple 32-bit value. 
-    // Note: This requires the IR hardware to be initialized, 
-    // but for now, this will fix the compilation error.
-    uint32_t address = 0x12;
-    uint32_t command = 0x34;
-    
-    // Most IR protocols use an address and a command
-    furi_hal_infrared_send_nec_ext(address, command); 
+    // A simple RAW signal: 1000ms ON, 500ms OFF
+    // This is the "base level" way to blink the IR LED
+    uint32_t timings[] = {1000, 500, 1000, 500};
+    size_t timings_cnt = sizeof(timings) / sizeof(uint32_t);
+
+    if(!furi_hal_infrared_is_busy()) {
+        furi_hal_infrared_transmit(timings, timings_cnt);
+    }
     
     notification_message(app->notify, &sequence_blink_red_100);
 }
