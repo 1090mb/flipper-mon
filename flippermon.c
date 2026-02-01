@@ -57,8 +57,16 @@ void scavenge_nfc(FlipperMonApp* app) {
 
 // --- Hardware Hook: IR Attack ---
 void send_ir_attack(FlipperMonApp* app) {
-    // Sending a raw IR signal (simplified for example)
-    furi_hal_infrared_transmit(0x12345678, 32); 
+    // Corrected function for the current SDK
+    // We'll send a simple 32-bit value. 
+    // Note: This requires the IR hardware to be initialized, 
+    // but for now, this will fix the compilation error.
+    uint32_t address = 0x12;
+    uint32_t command = 0x34;
+    
+    // Most IR protocols use an address and a command
+    furi_hal_infrared_send_nec_ext(address, command); 
+    
     notification_message(app->notify, &sequence_blink_red_100);
 }
 
