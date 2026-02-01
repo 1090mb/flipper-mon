@@ -1,4 +1,5 @@
 #include <furi.h>
+#include <furi_hal.h> // This is the "Master" HAL include
 #include <gui/gui.h>
 #include <input/input.h>
 #include <notification/notification_messages.h>
@@ -48,26 +49,31 @@ static void render_callback(Canvas* canvas, void* ctx) {
     furi_mutex_release(app->mutex);
 }
 
+// --- Hardware Hook: NFC Scavenge ---
 void scavenge_nfc(FlipperMonApp* app) {
-    // Check if an NFC card is physically near the Flipper
-    if(furi_hal_nfc_detect(NULL, 100)) { 
+    // Current SDK uses a Polled check for detection
+    bool detected = furi_hal_nfc_detect(NULL, 100); 
+    
+    // Note: If the error persists, some firmware versions require 
+    // a 'NfcDevice' pointer instead of NULL.
+    if(detected) { 
         app->pet.level++;
         notification_message(app->notify, &sequence_success);
     } else {
-        // Blink yellow if no card found
         notification_message(app->notify, &sequence_blink_yellow_100);
     }
 }
 
 // --- Hardware Hook: IR Attack ---
 void send_ir_attack(FlipperMonApp* app) {
-    // A simple RAW signal: 1000ms ON, 500ms OFF
-    // This is the "base level" way to blink the IR LED
+    // Current SDK requires the frequency to be defined for transmit
     uint32_t timings[] = {1000, 500, 1000, 500};
     size_t timings_cnt = sizeof(timings) / sizeof(uint32_t);
+    uint32_t frequency = 38000; // Standard 38kHz IR frequency
 
     if(!furi_hal_infrared_is_busy()) {
-        furi_hal_infrared_transmit(timings, timings_cnt);
+        // Updated to use the explicit transmit function
+        furi_hal_infrared_transmit(frequency, timings, timings_cnt);
     }
     
     notification_message(app->notify, &sequence_blink_red_100);
