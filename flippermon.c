@@ -1,132 +1,182 @@
 #include <furi.h>
-#include <furi_hal.h> // This is the "Master" HAL include
+#include <furi_hal.h>
 #include <gui/gui.h>
-#include <input/input.h>
+#include <gui/view_dispatcher.h>
+#include <gui/modules/submenu.h>
 #include <notification/notification_messages.h>
-#include <furi_hal_infrared.h>
 #include <furi_hal_nfc.h>
+#include <furi_hal_infrared.h>
 
-// --- Game Definitions ---
+// --- App Types & View IDs ---
 typedef enum {
-    StateNursery,
-    StateBattle,
-} GameState;
+    FlipperMonViewSubmenu,
+    FlipperMonViewNursery,
+} FlipperMonView;
 
+// The "Model" - Data that lives inside the View
 typedef struct {
     uint8_t health;
-    uint8_t energy;
     uint8_t level;
+    uint8_t happiness;
+    int8_t y_offset;
+    uint32_t last_tick;
     char name[12];
 } Creature;
 
 typedef struct {
-    FuriMutex* mutex;
-    GameState state;
-    Creature pet;
+    ViewDispatcher* view_dispatcher;
+    Submenu* submenu;
+    View* nursery_view;
     NotificationApp* notify;
+    uint32_t current_view;
+    // We keep a pointer here to access the model from the menu
+    Creature* global_pet_ptr; 
 } FlipperMonApp;
 
-// --- Rendering ---
-static void render_callback(Canvas* canvas, void* ctx) {
-    FlipperMonApp* app = ctx;
-    furi_mutex_acquire(app->mutex, FuriWaitForever);
+// --- 16x16 Yeti Sprite ---
+static const uint8_t yeti_sprite[] = {
+    0x00, 0x7E, 0x00, 0x81, 0x24, 0x81, 0x81, 0x00, 
+    0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00,
+    0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C
+};
+
+// --- Nursery Drawing Logic ---
+static void nursery_draw_callback(Canvas* canvas, void* model) {
+    Creature* pet = model;
+    if(!pet) return;
+
+    // Gravity & Hunger Logic
+    if(pet->y_offset < 0) pet->y_offset += 1;
+    uint32_t now = furi_get_tick();
+    if(now - pet->last_tick > 30000) {
+        if(pet->health > 0) pet->health--;
+        pet->last_tick = now;
+    }
 
     canvas_clear(canvas);
+    canvas_draw_frame(canvas, 0, 0, 128, 64);
+    
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 2, 12, "FLIPPER-MON");
-
-    if(app->state == StateNursery) {
-        // Draw the pet
-        canvas_draw_frame(canvas, 40, 20, 48, 32);
-        canvas_draw_circle(canvas, 55, 30, 2); // Eye
-        canvas_draw_circle(canvas, 73, 30, 2); // Eye
-        
-        canvas_set_font(canvas, FontSecondary);
-        char stats[32];
-        snprintf(stats, sizeof(stats), "%s | LV: %d | HP: %d", app->pet.name, app->pet.level, app->pet.health);
-        canvas_draw_str(canvas, 2, 60, stats);
-    }
-
-    furi_mutex_release(app->mutex);
+    canvas_draw_str(canvas, 5, 12, "NURSERY");
+    canvas_draw_xbm(canvas, 56, 22 + pet->y_offset, 16, 16, yeti_sprite);
+    
+    canvas_set_font(canvas, FontSecondary);
+    char stats[64];
+    snprintf(stats, sizeof(stats), "HP:%d  HAP:%d  LVL:%d", pet->health, pet->happiness, pet->level);
+    canvas_draw_str(canvas, 5, 58, stats);
+    canvas_draw_str(canvas, 75, 12, "L:Feed R:Play");
 }
 
-// --- Hardware Hook: NFC Scavenge ---
-void scavenge_nfc(FlipperMonApp* app) {
-    // The compiler suggested this exact name!
-    if(furi_hal_nfc_field_is_present()) { 
-        app->pet.level++;
-        notification_message(app->notify, &sequence_success);
-    } else {
-        // Blink yellow if no card found
-        notification_message(app->notify, &sequence_blink_yellow_100);
+// --- Nursery Input Logic ---
+bool nursery_input_callback(InputEvent* event, void* context) {
+    View* view = context;
+    if(event->type == InputTypeShort) {
+        with_view_model(view, Creature* pet, {
+            if(event->key == InputKeyLeft) {
+                if(pet->health < 100) pet->health += 5;
+                pet->y_offset = -4;
+            } else if(event->key == InputKeyRight) {
+                if(pet->happiness < 100) pet->happiness += 10;
+                pet->y_offset = -6;
+            }
+        }, true);
     }
+    return false; 
 }
 
-// --- Hardware Hook: IR Attack ---
-void send_ir_attack(FlipperMonApp* app) {
-    // To ensure this compiles, we use the most basic HAL toggle.
-    // This turns on the IR LED carrier, waits, then turns it off.
-    if(!furi_hal_infrared_is_busy()) {
+// --- Submenu Callbacks ---
+typedef enum {
+    FlipperMonMenuNursery,
+    FlipperMonMenuScavenge,
+    FlipperMonMenuAttack,
+} FlipperMonMenuIndex;
+
+void flippermon_menu_callback(void* context, uint32_t index) {
+    FlipperMonApp* app = context;
+    if(index == FlipperMonMenuNursery) {
+        app->current_view = FlipperMonViewNursery;
+        view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewNursery);
+    } else if(index == FlipperMonMenuScavenge) {
+        if(furi_hal_nfc_field_is_present()) {
+            // Update the model directly
+            with_view_model(app->nursery_view, Creature* pet, { pet->level++; }, true);
+            notification_message(app->notify, &sequence_success);
+        } else {
+            notification_message(app->notify, &sequence_blink_yellow_100);
+        }
+    } else if(index == FlipperMonMenuAttack) {
         furi_hal_infrared_set_tx_output(true);
         furi_delay_ms(50);
         furi_hal_infrared_set_tx_output(false);
-        
         notification_message(app->notify, &sequence_blink_red_100);
     }
 }
-// --- SubGHZ scavenge 
-void scavenge_subghz(FlipperMonApp* app) {
-    // Check if the Sub-GHz radio is picking up background noise/signals
-    // furi_hal_subghz_get_rssi() returns the Signal Strength
-    float rssi = furi_hal_subghz_get_rssi();
 
-    // If signal is stronger than -90dBm, your pet "eats" the radio waves
-    if(rssi > -90.0f) {
-        if(app->pet.energy < 100) app->pet.energy += 5;
-        notification_message(app->notify, &sequence_blink_blue_100);
+// --- Back Button Logic ---
+bool flippermon_back_event_callback(void* context) {
+    FlipperMonApp* app = context;
+    if(app->current_view == FlipperMonViewNursery) {
+        app->current_view = FlipperMonViewSubmenu;
+        view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
+        return true; 
     }
+    return false; // Exit App
 }
 
-// --- Main App Entry ---
+// --- Main App Setup ---
 int32_t flippermon_app(void* p) {
     UNUSED(p);
-    FuriMessageQueue* event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
     FlipperMonApp* app = malloc(sizeof(FlipperMonApp));
-    
-    app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
-    app->state = StateNursery;
     app->notify = furi_record_open(RECORD_NOTIFICATION);
-    
-    // Initial Stats
-    app->pet.health = 100;
-    app->pet.level = 1;
-    strncpy(app->pet.name, "YETI", 12);
+    app->current_view = FlipperMonViewSubmenu;
 
-    ViewPort* view_port = view_port_alloc();
-    view_port_draw_callback_set(view_port, render_callback, app);
-    view_port_input_callback_set(view_port, (void*)furi_message_queue_put, event_queue);
+    app->view_dispatcher = view_dispatcher_alloc();
+    view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
+    view_dispatcher_set_navigation_event_callback(app->view_dispatcher, flippermon_back_event_callback);
 
+    // 1. Submenu View
+    app->submenu = submenu_alloc();
+    submenu_set_header(app->submenu, "Flipper-Mon");
+    submenu_add_item(app->submenu, "Enter Nursery", FlipperMonMenuNursery, flippermon_menu_callback, app);
+    submenu_add_item(app->submenu, "NFC Scavenge", FlipperMonMenuScavenge, flippermon_menu_callback, app);
+    submenu_add_item(app->submenu, "IR Attack", FlipperMonMenuAttack, flippermon_menu_callback, app);
+    view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewSubmenu, submenu_get_view(app->submenu));
+
+    // 2. Nursery View with Internal Model
+    app->nursery_view = view_alloc();
+    view_allocate_model(app->nursery_view, ViewModelTypeLockFree, sizeof(Creature));
+    view_set_draw_callback(app->nursery_view, nursery_draw_callback);
+    view_set_input_callback(app->nursery_view, nursery_input_callback);
+    view_set_context(app->nursery_view, app->nursery_view);
+
+    // Initialize the Model Data safely
+    with_view_model(app->nursery_view, Creature* pet, {
+        pet->health = 100;
+        pet->happiness = 80;
+        pet->level = 1;
+        pet->y_offset = 0;
+        pet->last_tick = furi_get_tick();
+        strncpy(pet->name, "YETI", 12);
+    }, true);
+
+    view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewNursery, app->nursery_view);
+
+    // Start UI
     Gui* gui = furi_record_open(RECORD_GUI);
-    gui_add_view_port(gui, view_port, GuiLayerFullscreen);
+    view_dispatcher_attach_to_gui(app->view_dispatcher, gui, ViewDispatcherTypeFullscreen);
+    view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
 
-    InputEvent event;
-    while(furi_message_queue_get(event_queue, &event, FuriWaitForever) == FuriStatusOk) {
-        if(event.type == InputTypeShort) {
-            if(event.key == InputKeyBack) break;
-            if(event.key == InputKeyOk) scavenge_nfc(app); // Press OK to "Scan NFC"
-            if(event.key == InputKeyUp) send_ir_attack(app); // Press UP to shoot IR
-            scavenge_subghz(app);
-        }
-        view_port_update(view_port);
-    }
+    view_dispatcher_run(app->view_dispatcher);
 
-    // Cleanup
-    gui_remove_view_port(gui, view_port);
-    view_port_free(view_port);
-    furi_message_queue_free(event_queue);
+    // --- Cleanup ---
+    view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewSubmenu);
+    view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewNursery);
+    submenu_free(app->submenu);
+    view_free(app->nursery_view);
+    view_dispatcher_free(app->view_dispatcher);
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
-    furi_mutex_free(app->mutex);
     free(app);
+
     return 0;
 }
