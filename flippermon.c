@@ -24,7 +24,14 @@ typedef struct {
     GameState state;
     Creature pet;
     NotificationApp* notify;
+    uint32_t last_back_press; // Add this line
 } FlipperMonApp;
+
+static const uint8_t yeti_sprite[] = {
+    0x00, 0x7E, 0x00, 0x81, 0x24, 0x81, 0x81, 0x00, 
+    0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00
+};
+
 
 // --- Rendering ---
 static void render_callback(Canvas* canvas, void* ctx) {
@@ -36,15 +43,16 @@ static void render_callback(Canvas* canvas, void* ctx) {
     canvas_draw_str(canvas, 2, 12, "FLIPPER-MON");
 
     if(app->state == StateNursery) {
-        // Draw the pet
-        canvas_draw_frame(canvas, 40, 20, 48, 32);
-        canvas_draw_circle(canvas, 55, 30, 2); // Eye
-        canvas_draw_circle(canvas, 73, 30, 2); // Eye
+        // Draw our 1-bit Yeti instead of a frame!
+        canvas_draw_xbm(canvas, 48, 25, 16, 16, yeti_sprite);
         
         canvas_set_font(canvas, FontSecondary);
         char stats[32];
         snprintf(stats, sizeof(stats), "%s | LV: %d | HP: %d", app->pet.name, app->pet.level, app->pet.health);
         canvas_draw_str(canvas, 2, 60, stats);
+        
+        // Add a hint for the user
+        canvas_draw_str(canvas, 80, 10, "2x BACK to exit");
     }
 
     furi_mutex_release(app->mutex);
@@ -112,10 +120,22 @@ int32_t flippermon_app(void* p) {
     InputEvent event;
     while(furi_message_queue_get(event_queue, &event, FuriWaitForever) == FuriStatusOk) {
         if(event.type == InputTypeShort) {
-            if(event.key == InputKeyBack) break;
-            if(event.key == InputKeyOk) scavenge_nfc(app); // Press OK to "Scan NFC"
-            if(event.key == InputKeyUp) send_ir_attack(app); // Press UP to shoot IR
-            scavenge_subghz(app);
+            // --- NEW DOUBLE-BACK EXIT LOGIC ---
+            if(event.key == InputKeyBack) {
+                uint32_t current_tick = furi_get_tick();
+                // Check if the last press was within 300ms
+                if(current_tick - app->last_back_press < 300) {
+                    break; // EXIT THE WHILE LOOP AND CLOSE APP
+                } else {
+                    app->last_back_press = current_tick;
+                    // Optional: Give a small vibration or hint to the user
+                    notification_message(app->notify, &sequence_error); 
+                }
+            }
+            
+            // --- YOUR OTHER CONTROLS ---
+            if(event.key == InputKeyOk) scavenge_nfc(app);
+            if(event.key == InputKeyUp) send_ir_attack(app);
         }
         view_port_update(view_port);
     }
