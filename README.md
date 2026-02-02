@@ -1,23 +1,29 @@
 # Flipper-Mon 🦖
 
 [![Platform: Flipper Zero](https://img.shields.io/badge/Platform-Flipper%20Zero-orange.svg)](https://flipperzero.one/)
-[![SDK: 2026 Stable](https://img.shields.io/badge/SDK-2026%20Stable-blue.svg)](https://github.com/flipperdevices/flipperzero-firmware)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Status: v1.2 Stable](https://img.shields.io/badge/Status-v1.2%20Stable-blue.svg)](https://github.com/yourusername/flipper-mon)
 
-**Flipper-Mon** is an interactive digital pet and hardware-exploration game for the Flipper Zero. It brings the nostalgia of 90s virtual pets to your favorite hacking tool, utilizing NFC for growth and IR for interaction.
+**Flipper-Mon** is a persistent digital pet game for the Flipper Zero. It combines classic virtual pet care with real-world hardware exploration. Every Flipper Zero gets a unique pet linked to its hardware identity!
 
 ---
 
 ## 🕹️ Game Mechanics
 
 ### **The Nursery**
-The heart of the game. Here you can monitor your pet's vitals and interact with it directly.
-* **Vitals:** Track **HP** (Health), **HAP** (Happiness), and **LVL** (Level).
-* **Interactions:** Use the D-Pad to Feed or Play with your Yeti.
-* **Evolution:** Watch your pet grow! At **Level 5**, your Yeti evolves into a larger, more powerful form.
+Monitor and care for your pet in its living quarters.
+* **Care Actions:** Feed your pet to restore **HP** or play with it to increase **HAP** (Happiness).
+* **Evolution:** Once your pet reaches **Level 5**, it evolves from a small Yeti into its larger "Abominable" form.
+* **Hardware Identity:** Your pet’s name is procedurally generated using your Flipper's unique hardware name (e.g., `Mylo-mon`).
 
-### **Hardware Integration**
-* **NFC Scavenging:** Your pet "eats" data. Scan any NFC tag (Amiibo, hotel key, credit card) to gain experience points.
-* **IR Burst:** Use the front-facing IR LED to emit signals during "Battle" mode.
+### **NFC Scavenging (The Mystery Box)**
+Your pet "consumes" the data from real-world NFC tags. Scanning different tags provides randomized rewards based on the tag's unique UID:
+* 🍬 **Rare Candy:** Massive Level boost (10% chance).
+* 🍗 **Feast:** Instantly refills Health to 100%.
+* 🧸 **Super Toy:** Instantly refills Happiness to 100%.
+* ✨ **Standard XP:** Common level progression.
+
+
 
 ---
 
@@ -25,24 +31,26 @@ The heart of the game. Here you can monitor your pet's vitals and interact with 
 
 | Action | Input (Main Menu) | Input (Nursery) |
 | :--- | :--- | :--- |
-| **Move/Select** | Up/Down | — |
-| **Confirm** | OK | — |
 | **Feed (+HP)** | — | Left |
 | **Play (+HAP)** | — | Right |
-| **Sleep/Wake** | — | OK |
-| **Go Back** | Back | Back |
-| **Exit App** | Back (Double-Tap) | — |
+| **Select** | OK | — |
+| **Back/Save** | Back | Back |
 
 ---
 
-## 🛠️ Build & Installation
+## 🛠️ Technical Features
+* **Persistent Storage:** All stats are saved to `/ext/apps_data/flippermon/save.dat`. Data is automatically saved upon leveling up or exiting the Nursery.
+* **Thread-Safe Rendering:** Built using the `ViewModel` architecture to prevent screen flickering or null-pointer crashes.
+* **Audio Engine:** Utilizes the Flipper's piezo speaker for interactive beeps and level-up fanfares.
 
-This project uses **uFBT**, the official micro Flipper Build Tool.
+---
 
-### **1. Clone the Repository**
-```bash
-git clone [https://github.com/yourusername/flipper-mon.git](https://github.com/yourusername/flipper-mon.git)
-cd flipper-mon
+## 📂 Installation
 
-Connect your Flipper Zero via USB and run:
-ufbt launch
+Ensure you have [uFBT](https://github.com/flipperdevices/flipperzero-ufbt) installed.
+
+1. Clone the repository to your computer.
+2. Connect your Flipper Zero via USB.
+3. Run:
+   ```bash
+   ufbt launch
