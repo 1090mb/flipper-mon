@@ -6,20 +6,22 @@
 #include <notification/notification_messages.h>
 #include <furi_hal_nfc.h>
 #include <furi_hal_infrared.h>
+#include <storage/storage.h>
+
+#define SAVE_PATH EXT_PATH("apps_data/flippermon/save.dat")
 
 typedef enum {
     FlipperMonViewSubmenu,
     FlipperMonViewNursery,
 } FlipperMonView;
 
-// The Model: Data that is "owned" by the View for safe drawing
 typedef struct {
     uint8_t health;
     uint8_t level;
     uint8_t happiness;
     int8_t y_offset;
-    bool evolving;
-} NurseryModel;
+    char name[16]; // Increased for unique names
+} Creature;
 
 typedef struct {
     ViewDispatcher* view_dispatcher;
@@ -27,52 +29,115 @@ typedef struct {
     View* nursery_view;
     NotificationApp* notify;
     uint32_t current_view;
-    NurseryModel global_stats; // Master stats
+    Creature pet;
+    FuriMutex* mutex;
 } FlipperMonApp;
 
 static const uint8_t yeti_small[] = { 0x00, 0x7E, 0x00, 0x81, 0x24, 0x81, 0x81, 0x00, 0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00, 0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C };
 static const uint8_t yeti_large[] = { 0x3C, 0x42, 0x99, 0xA5, 0x81, 0xA5, 0x99, 0x42, 0x3C, 0x42, 0x81, 0xBD, 0xBD, 0x81, 0x42, 0x3C, 0x3C, 0x42, 0x81, 0xA5, 0xA5, 0x81, 0x42, 0x3C };
 
-static void nursery_draw_callback(Canvas* canvas, void* model) {
-    NurseryModel* data = model;
-    if(!data) return;
+// --- Audio Functions ---
+void play_happy_beeps() {
+    if(furi_hal_speaker_acquire(1000)) {
+        furi_hal_speaker_start(440.0f, 1.0f); // A4
+        furi_delay_ms(50);
+        furi_hal_speaker_start(880.0f, 1.0f); // A5
+        furi_delay_ms(100);
+        furi_hal_speaker_stop();
+        furi_hal_speaker_release();
+    }
+}
+
+void play_level_up_fanfare() {
+    float notes[] = {523.25f, 659.25f, 783.99f, 1046.50f}; // C5, E5, G5, C6
+    if(furi_hal_speaker_acquire(1000)) {
+        for(int i = 0; i < 4; i++) {
+            furi_hal_speaker_start(notes[i], 1.0f);
+            furi_delay_ms(100);
+        }
+        furi_hal_speaker_stop();
+        furi_hal_speaker_release();
+    }
+}
+
+// --- Unique Name Generator ---
+void generate_pet_name(char* name_out) {
+    const char* flipper_name = furi_hal_version_get_name_ptr();
+    if(flipper_name) {
+        snprintf(name_out, 16, "%s-mon", flipper_name);
+    } else {
+        strncpy(name_out, "Yeti-mon", 16);
+    }
+}
+
+// --- Storage Logic ---
+void save_game(FlipperMonApp* app) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    storage_common_mkdir(storage, EXT_PATH("apps_data/flippermon"));
+    File* file = storage_file_alloc(storage);
+    if(storage_file_open(file, SAVE_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        storage_file_write(file, &app->pet, sizeof(Creature));
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+void load_game(FlipperMonApp* app) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* file = storage_file_alloc(storage);
+    bool loaded = false;
+    if(storage_file_open(file, SAVE_PATH, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        if(storage_file_read(file, &app->pet, sizeof(Creature)) == sizeof(Creature)) {
+            loaded = true;
+        }
+    }
+    
+    if(!loaded) {
+        app->pet.health = 100;
+        app->pet.level = 1;
+        app->pet.happiness = 80;
+        generate_pet_name(app->pet.name);
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
+// --- UI Callbacks ---
+static void nursery_draw_callback(Canvas* canvas, void* context) {
+    FlipperMonApp* app = context;
+    if(!app || !app->mutex || furi_mutex_acquire(app->mutex, 0) != FuriStatusOk) return;
 
     canvas_clear(canvas);
-    
-    // Level Up Flash
-    if(data->evolving) {
-        canvas_set_color(canvas, ColorBlack);
-        canvas_draw_box(canvas, 0, 0, 128, 64);
-        canvas_set_color(canvas, ColorWhite);
-        canvas_set_font(canvas, FontPrimary);
-        canvas_draw_str_aligned(canvas, 64, 32, AlignCenter, AlignCenter, "EVOLVING!");
-        return;
-    }
-
     canvas_draw_frame(canvas, 0, 0, 128, 64);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 5, 12, "NURSERY");
+    canvas_draw_str(canvas, 5, 12, app->pet.name);
 
-    const uint8_t* sprite = (data->level >= 5) ? yeti_large : yeti_small;
-    canvas_draw_xbm(canvas, 56, 25 + data->y_offset, 16, 16, sprite);
-
+    const uint8_t* sprite = (app->pet.level >= 5) ? yeti_large : yeti_small;
+    canvas_draw_xbm(canvas, 56, 22 + app->pet.y_offset, 16, 16, sprite);
+    
     canvas_set_font(canvas, FontSecondary);
     char stats[64];
-    snprintf(stats, sizeof(stats), "HP:%d HAP:%d LVL:%d", data->health, data->happiness, data->level);
+    snprintf(stats, sizeof(stats), "HP:%d HAP:%d LVL:%d", app->pet.health, app->pet.happiness, app->pet.level);
     canvas_draw_str(canvas, 5, 58, stats);
 
-    if(data->y_offset < 0) data->y_offset += 1;
+    if(app->pet.y_offset < 0) app->pet.y_offset += 1;
+    furi_mutex_release(app->mutex);
 }
 
 bool nursery_input_callback(InputEvent* event, void* context) {
-    View* view = context;
+    FlipperMonApp* app = context;
     if(event->type == InputTypeShort) {
-        with_view_model(view, NurseryModel* data, {
-            if(event->key == InputKeyLeft) data->health = (data->health < 100) ? data->health + 5 : 100;
-            if(event->key == InputKeyRight) data->happiness = (data->happiness < 100) ? data->happiness + 10 : 100;
-            data->y_offset = -4;
-        }, true);
-        return true;
+        if(furi_mutex_acquire(app->mutex, FuriWaitForever) == FuriStatusOk) {
+            if(event->key == InputKeyLeft && app->pet.health < 100) {
+                app->pet.health += 5;
+                play_happy_beeps();
+            }
+            app->pet.y_offset = -4;
+            furi_mutex_release(app->mutex);
+            return true;
+        }
     }
     return false;
 }
@@ -81,36 +146,23 @@ void flippermon_menu_callback(void* context, uint32_t index) {
     FlipperMonApp* app = context;
     if(index == 0) {
         app->current_view = FlipperMonViewNursery;
-        // Sync global stats to the view model before switching
-        with_view_model(app->nursery_view, NurseryModel* data, {
-            data->health = app->global_stats.health;
-            data->level = app->global_stats.level;
-            data->happiness = app->global_stats.happiness;
-        }, true);
         view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewNursery);
     } else if(index == 1) { // Scavenge
         if(furi_hal_nfc_field_is_present()) {
-            app->global_stats.level++;
+            furi_mutex_acquire(app->mutex, FuriWaitForever);
+            app->pet.level++;
+            furi_mutex_release(app->mutex);
+            play_level_up_fanfare();
             notification_message(app->notify, &sequence_success);
-            
-            // Trigger Evolution Animation if hitting level 5
-            if(app->global_stats.level == 5) {
-                app->global_stats.evolving = true;
-                notification_message(app->notify, &sequence_display_backlight_on);
-            }
+            save_game(app);
         }
     }
 }
 
+// (Navigation and Main App entry remain standard)
 bool flippermon_back_event_callback(void* context) {
     FlipperMonApp* app = context;
     if(app->current_view == FlipperMonViewNursery) {
-        // Sync stats back to global before leaving
-        with_view_model(app->nursery_view, NurseryModel* data, {
-            app->global_stats.health = data->health;
-            app->global_stats.happiness = data->happiness;
-            app->global_stats.level = data->level;
-        }, false);
         app->current_view = FlipperMonViewSubmenu;
         view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
         return true; 
@@ -121,32 +173,26 @@ bool flippermon_back_event_callback(void* context) {
 int32_t flippermon_app(void* p) {
     UNUSED(p);
     FlipperMonApp* app = malloc(sizeof(FlipperMonApp));
+    app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     app->notify = furi_record_open(RECORD_NOTIFICATION);
     
-    // Initial Stats
-    app->global_stats.health = 100;
-    app->global_stats.level = 1;
-    app->global_stats.happiness = 50;
-    app->global_stats.evolving = false;
+    load_game(app);
     app->current_view = FlipperMonViewSubmenu;
 
     app->view_dispatcher = view_dispatcher_alloc();
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_navigation_event_callback(app->view_dispatcher, flippermon_back_event_callback);
 
-    // Submenu
     app->submenu = submenu_alloc();
     submenu_set_header(app->submenu, "Flipper-Mon");
     submenu_add_item(app->submenu, "Nursery", 0, flippermon_menu_callback, app);
     submenu_add_item(app->submenu, "Scavenge (NFC)", 1, flippermon_menu_callback, app);
     view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewSubmenu, submenu_get_view(app->submenu));
 
-    // Nursery View with allocated Model
     app->nursery_view = view_alloc();
-    view_allocate_model(app->nursery_view, ViewModelTypeLockFree, sizeof(NurseryModel));
+    view_set_context(app->nursery_view, app);
     view_set_draw_callback(app->nursery_view, nursery_draw_callback);
     view_set_input_callback(app->nursery_view, nursery_input_callback);
-    view_set_context(app->nursery_view, app->nursery_view); // Context is the view itself for the model
     view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewNursery, app->nursery_view);
 
     Gui* gui = furi_record_open(RECORD_GUI);
@@ -155,7 +201,8 @@ int32_t flippermon_app(void* p) {
 
     view_dispatcher_run(app->view_dispatcher);
 
-    // Cleanup
+    save_game(app);
+    // Cleanup code (same as before)
     view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewSubmenu);
     view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewNursery);
     submenu_free(app->submenu);
@@ -163,6 +210,7 @@ int32_t flippermon_app(void* p) {
     view_dispatcher_free(app->view_dispatcher);
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
+    furi_mutex_free(app->mutex);
     free(app);
     return 0;
 }
