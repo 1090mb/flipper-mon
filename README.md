@@ -43,3 +43,6 @@ This project uses **uFBT**, the official micro Flipper Build Tool.
 ```bash
 git clone [https://github.com/yourusername/flipper-mon.git](https://github.com/yourusername/flipper-mon.git)
 cd flipper-mon
+
+Connect your Flipper Zero via USB and run:
+ufbt launch
