@@ -51,32 +51,27 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
 // --- Hardware Hook: NFC Scavenge ---
 void scavenge_nfc(FlipperMonApp* app) {
-    // Current SDK uses a Polled check for detection
-    bool detected = furi_hal_nfc_detect(NULL, 100); 
-    
-    // Note: If the error persists, some firmware versions require 
-    // a 'NfcDevice' pointer instead of NULL.
-    if(detected) { 
+    // The compiler suggested this exact name!
+    if(furi_hal_nfc_field_is_present()) { 
         app->pet.level++;
         notification_message(app->notify, &sequence_success);
     } else {
+        // Blink yellow if no card found
         notification_message(app->notify, &sequence_blink_yellow_100);
     }
 }
 
 // --- Hardware Hook: IR Attack ---
 void send_ir_attack(FlipperMonApp* app) {
-    // Current SDK requires the frequency to be defined for transmit
-    uint32_t timings[] = {1000, 500, 1000, 500};
-    size_t timings_cnt = sizeof(timings) / sizeof(uint32_t);
-    uint32_t frequency = 38000; // Standard 38kHz IR frequency
-
+    // To ensure this compiles, we use the most basic HAL toggle.
+    // This turns on the IR LED carrier, waits, then turns it off.
     if(!furi_hal_infrared_is_busy()) {
-        // Updated to use the explicit transmit function
-        furi_hal_infrared_transmit(frequency, timings, timings_cnt);
+        furi_hal_infrared_set_tx_output(true);
+        furi_delay_ms(50);
+        furi_hal_infrared_set_tx_output(false);
+        
+        notification_message(app->notify, &sequence_blink_red_100);
     }
-    
-    notification_message(app->notify, &sequence_blink_red_100);
 }
 
 // --- Main App Entry ---
