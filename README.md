@@ -1,23 +1,18 @@
 # Flipper-Mon 🦖
 
 [![Platform: Flipper Zero](https://img.shields.io/badge/Platform-Flipper%20Zero-orange.svg)](https://flipperzero.one/)
-[![SDK: 2026 Stable](https://img.shields.io/badge/SDK-2026%20Stable-blue.svg)](https://github.com/flipperdevices/flipperzero-firmware)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Flipper-Mon** is an interactive digital pet and hardware-exploration game for the Flipper Zero. It brings the nostalgia of 90s virtual pets to your favorite hacking tool, utilizing NFC for growth and IR for interaction.
+**Flipper-Mon** is a persistent digital pet game for the Flipper Zero. It features hardware-linked naming, SD card save states, and interactive care mechanics.
 
 ---
 
-## 🕹️ Game Mechanics
-
-### **The Nursery**
-The heart of the game. Here you can monitor your pet's vitals and interact with it directly.
-* **Vitals:** Track **HP** (Health), **HAP** (Happiness), and **LVL** (Level).
-* **Interactions:** Use the D-Pad to Feed or Play with your Yeti.
-* **Evolution:** Watch your pet grow! At **Level 5**, your Yeti evolves into a larger, more powerful form.
-
-### **Hardware Integration**
-* **NFC Scavenging:** Your pet "eats" data. Scan any NFC tag (Amiibo, hotel key, credit card) to gain experience points.
-* **IR Burst:** Use the front-facing IR LED to emit signals during "Battle" mode.
+## ✨ Features
+- **Persistent Progress:** Stats (Level, Health, Happiness) are saved to `/ext/apps_data/flippermon/save.dat`.
+- **Unique Hardware Identity:** Your pet's name is procedurally generated based on your Flipper's unique ID.
+- **Audio Feedback:** Piezo-speaker chirps for feeding and fanfares for leveling up.
+- **Evolution:** Level 5+ transforms your Yeti into its larger "Abominable" form.
+- **NFC Scavenging:** Level up by scanning real-world NFC tags and cards.
 
 ---
 
@@ -25,24 +20,21 @@ The heart of the game. Here you can monitor your pet's vitals and interact with 
 
 | Action | Input (Main Menu) | Input (Nursery) |
 | :--- | :--- | :--- |
-| **Move/Select** | Up/Down | — |
-| **Confirm** | OK | — |
 | **Feed (+HP)** | — | Left |
 | **Play (+HAP)** | — | Right |
-| **Sleep/Wake** | — | OK |
-| **Go Back** | Back | Back |
-| **Exit App** | Back (Double-Tap) | — |
+| **Navigation** | Up/Down | Back |
+| **Select** | OK | — |
 
 ---
 
 ## 🛠️ Build & Installation
 
-This project uses **uFBT**, the official micro Flipper Build Tool.
+Ensure you have [uFBT](https://github.com/flipperdevices/flipperzero-ufbt) installed.
 
-### **1. Clone the Repository**
-```bash
-git clone [https://github.com/yourusername/flipper-mon.git](https://github.com/yourusername/flipper-mon.git)
-cd flipper-mon
+1. Connect Flipper via USB.
+2. Run `ufbt launch` from the project root.
 
-Connect your Flipper Zero via USB and run:
-ufbt launch
+---
+
+## 📜 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
