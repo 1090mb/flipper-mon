@@ -1,3 +1,4 @@
+# In application.fam
 App(
     appid="flippermon",
     name="Flipper-Mon",
@@ -5,8 +6,7 @@ App(
     entry_point="flippermon_app",
     stack_size=2 * 1024,
     fap_category="Games",
-    fap_icon="flippermon.png", # You can add a 10x10 icon later
-    fap_description="Digital pet battler with NFC and IR support.",
+    # fap_icon="flippermon.png",  <-- Comment this out with a #
+    fap_description="Digital pet battler",
     fap_author="Dev & AI",
-    fap_weburl="https://github.com/yourhandle/flippermon",
 )
