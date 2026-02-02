@@ -7,15 +7,19 @@
 #include <furi_hal_nfc.h>
 #include <furi_hal_infrared.h>
 
-// --- App Types ---
+// --- App Types & View IDs ---
 typedef enum {
     FlipperMonViewSubmenu,
     FlipperMonViewNursery,
 } FlipperMonView;
 
+// The "Model" - Data that lives inside the View
 typedef struct {
     uint8_t health;
     uint8_t level;
+    uint8_t happiness;
+    int8_t y_offset;
+    uint32_t last_tick;
     char name[12];
 } Creature;
 
@@ -24,30 +28,63 @@ typedef struct {
     Submenu* submenu;
     View* nursery_view;
     NotificationApp* notify;
-    Creature pet;
     uint32_t current_view;
+    // We keep a pointer here to access the model from the menu
+    Creature* global_pet_ptr; 
 } FlipperMonApp;
 
+// --- 16x16 Yeti Sprite ---
 static const uint8_t yeti_sprite[] = {
     0x00, 0x7E, 0x00, 0x81, 0x24, 0x81, 0x81, 0x00, 
     0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00,
     0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C
 };
 
+// --- Nursery Drawing Logic ---
 static void nursery_draw_callback(Canvas* canvas, void* model) {
     Creature* pet = model;
+    if(!pet) return;
+
+    // Gravity & Hunger Logic
+    if(pet->y_offset < 0) pet->y_offset += 1;
+    uint32_t now = furi_get_tick();
+    if(now - pet->last_tick > 30000) {
+        if(pet->health > 0) pet->health--;
+        pet->last_tick = now;
+    }
+
     canvas_clear(canvas);
+    canvas_draw_frame(canvas, 0, 0, 128, 64);
+    
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 2, 12, "NURSERY");
-    canvas_draw_xbm(canvas, 48, 22, 16, 16, yeti_sprite);
+    canvas_draw_str(canvas, 5, 12, "NURSERY");
+    canvas_draw_xbm(canvas, 56, 22 + pet->y_offset, 16, 16, yeti_sprite);
     
     canvas_set_font(canvas, FontSecondary);
     char stats[64];
-    snprintf(stats, sizeof(stats), "LVL: %d | HP: %d", pet->level, pet->health);
-    canvas_draw_str(canvas, 2, 54, stats);
-    canvas_draw_str(canvas, 2, 63, "Press BACK to Menu");
+    snprintf(stats, sizeof(stats), "HP:%d  HAP:%d  LVL:%d", pet->health, pet->happiness, pet->level);
+    canvas_draw_str(canvas, 5, 58, stats);
+    canvas_draw_str(canvas, 75, 12, "L:Feed R:Play");
 }
 
+// --- Nursery Input Logic ---
+bool nursery_input_callback(InputEvent* event, void* context) {
+    View* view = context;
+    if(event->type == InputTypeShort) {
+        with_view_model(view, Creature* pet, {
+            if(event->key == InputKeyLeft) {
+                if(pet->health < 100) pet->health += 5;
+                pet->y_offset = -4;
+            } else if(event->key == InputKeyRight) {
+                if(pet->happiness < 100) pet->happiness += 10;
+                pet->y_offset = -6;
+            }
+        }, true);
+    }
+    return false; 
+}
+
+// --- Submenu Callbacks ---
 typedef enum {
     FlipperMonMenuNursery,
     FlipperMonMenuScavenge,
@@ -61,13 +98,13 @@ void flippermon_menu_callback(void* context, uint32_t index) {
         view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewNursery);
     } else if(index == FlipperMonMenuScavenge) {
         if(furi_hal_nfc_field_is_present()) {
-            app->pet.level++;
+            // Update the model directly
+            with_view_model(app->nursery_view, Creature* pet, { pet->level++; }, true);
             notification_message(app->notify, &sequence_success);
         } else {
             notification_message(app->notify, &sequence_blink_yellow_100);
         }
     } else if(index == FlipperMonMenuAttack) {
-        // We go back to the most stable IR toggle for 2026
         furi_hal_infrared_set_tx_output(true);
         furi_delay_ms(50);
         furi_hal_infrared_set_tx_output(false);
@@ -75,8 +112,7 @@ void flippermon_menu_callback(void* context, uint32_t index) {
     }
 }
 
-// Navigation Callback must return BOOL
-// True = Event handled, False = Pass to system (which usually exits)
+// --- Back Button Logic ---
 bool flippermon_back_event_callback(void* context) {
     FlipperMonApp* app = context;
     if(app->current_view == FlipperMonViewNursery) {
@@ -84,40 +120,55 @@ bool flippermon_back_event_callback(void* context) {
         view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
         return true; 
     }
-    return false; // This will trigger the app exit
+    return false; // Exit App
 }
 
+// --- Main App Setup ---
 int32_t flippermon_app(void* p) {
     UNUSED(p);
     FlipperMonApp* app = malloc(sizeof(FlipperMonApp));
     app->notify = furi_record_open(RECORD_NOTIFICATION);
-    app->pet.health = 100;
-    app->pet.level = 1;
     app->current_view = FlipperMonViewSubmenu;
 
     app->view_dispatcher = view_dispatcher_alloc();
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_navigation_event_callback(app->view_dispatcher, flippermon_back_event_callback);
 
+    // 1. Submenu View
     app->submenu = submenu_alloc();
     submenu_set_header(app->submenu, "Flipper-Mon");
-    submenu_add_item(app->submenu, "Nursery", FlipperMonMenuNursery, flippermon_menu_callback, app);
+    submenu_add_item(app->submenu, "Enter Nursery", FlipperMonMenuNursery, flippermon_menu_callback, app);
     submenu_add_item(app->submenu, "NFC Scavenge", FlipperMonMenuScavenge, flippermon_menu_callback, app);
     submenu_add_item(app->submenu, "IR Attack", FlipperMonMenuAttack, flippermon_menu_callback, app);
     view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewSubmenu, submenu_get_view(app->submenu));
 
+    // 2. Nursery View with Internal Model
     app->nursery_view = view_alloc();
+    view_allocate_model(app->nursery_view, ViewModelTypeLockFree, sizeof(Creature));
     view_set_draw_callback(app->nursery_view, nursery_draw_callback);
-    view_set_context(app->nursery_view, &app->pet);
+    view_set_input_callback(app->nursery_view, nursery_input_callback);
+    view_set_context(app->nursery_view, app->nursery_view);
+
+    // Initialize the Model Data safely
+    with_view_model(app->nursery_view, Creature* pet, {
+        pet->health = 100;
+        pet->happiness = 80;
+        pet->level = 1;
+        pet->y_offset = 0;
+        pet->last_tick = furi_get_tick();
+        strncpy(pet->name, "YETI", 12);
+    }, true);
+
     view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewNursery, app->nursery_view);
 
+    // Start UI
     Gui* gui = furi_record_open(RECORD_GUI);
     view_dispatcher_attach_to_gui(app->view_dispatcher, gui, ViewDispatcherTypeFullscreen);
     view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
 
     view_dispatcher_run(app->view_dispatcher);
 
-    // Cleanup
+    // --- Cleanup ---
     view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewSubmenu);
     view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewNursery);
     submenu_free(app->submenu);
