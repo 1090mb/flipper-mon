@@ -14,6 +14,7 @@ typedef enum {
 
 typedef struct {
     uint8_t health;
+    uint8_t energy;
     uint8_t level;
     char name[12];
 } Creature;
@@ -73,6 +74,18 @@ void send_ir_attack(FlipperMonApp* app) {
         notification_message(app->notify, &sequence_blink_red_100);
     }
 }
+// --- SubGHZ scavenge 
+void scavenge_subghz(FlipperMonApp* app) {
+    // Check if the Sub-GHz radio is picking up background noise/signals
+    // furi_hal_subghz_get_rssi() returns the Signal Strength
+    float rssi = furi_hal_subghz_get_rssi();
+
+    // If signal is stronger than -90dBm, your pet "eats" the radio waves
+    if(rssi > -90.0f) {
+        if(app->pet.energy < 100) app->pet.energy += 5;
+        notification_message(app->notify, &sequence_blink_blue_100);
+    }
+}
 
 // --- Main App Entry ---
 int32_t flippermon_app(void* p) {
@@ -102,6 +115,7 @@ int32_t flippermon_app(void* p) {
             if(event.key == InputKeyBack) break;
             if(event.key == InputKeyOk) scavenge_nfc(app); // Press OK to "Scan NFC"
             if(event.key == InputKeyUp) send_ir_attack(app); // Press UP to shoot IR
+            scavenge_subghz(app);
         }
         view_port_update(view_port);
     }
