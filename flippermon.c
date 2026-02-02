@@ -1,152 +1,131 @@
 #include <furi.h>
-#include <furi_hal.h> // This is the "Master" HAL include
+#include <furi_hal.h>
 #include <gui/gui.h>
-#include <input/input.h>
+#include <gui/view_dispatcher.h>
+#include <gui/modules/submenu.h>
 #include <notification/notification_messages.h>
-#include <furi_hal_infrared.h>
 #include <furi_hal_nfc.h>
+#include <furi_hal_infrared.h>
 
-// --- Game Definitions ---
+// --- App Types ---
 typedef enum {
-    StateNursery,
-    StateBattle,
-} GameState;
+    FlipperMonViewSubmenu,
+    FlipperMonViewNursery,
+} FlipperMonView;
 
 typedef struct {
     uint8_t health;
-    uint8_t energy;
     uint8_t level;
     char name[12];
 } Creature;
 
 typedef struct {
-    FuriMutex* mutex;
-    GameState state;
-    Creature pet;
+    ViewDispatcher* view_dispatcher;
+    Submenu* submenu;
+    View* nursery_view;
     NotificationApp* notify;
-    uint32_t last_back_press; // Add this line
+    Creature pet;
+    uint32_t current_view;
 } FlipperMonApp;
 
 static const uint8_t yeti_sprite[] = {
     0x00, 0x7E, 0x00, 0x81, 0x24, 0x81, 0x81, 0x00, 
-    0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00
+    0x81, 0x42, 0x81, 0x3C, 0x81, 0x00, 0x7E, 0x00,
+    0x3C, 0x42, 0x81, 0x81, 0x81, 0x81, 0x42, 0x3C
 };
 
-
-// --- Rendering ---
-static void render_callback(Canvas* canvas, void* ctx) {
-    FlipperMonApp* app = ctx;
-    furi_mutex_acquire(app->mutex, FuriWaitForever);
-
+static void nursery_draw_callback(Canvas* canvas, void* model) {
+    Creature* pet = model;
     canvas_clear(canvas);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str(canvas, 2, 12, "FLIPPER-MON");
-
-    if(app->state == StateNursery) {
-        // Draw our 1-bit Yeti instead of a frame!
-        canvas_draw_xbm(canvas, 48, 25, 16, 16, yeti_sprite);
-        
-        canvas_set_font(canvas, FontSecondary);
-        char stats[32];
-        snprintf(stats, sizeof(stats), "%s | LV: %d | HP: %d", app->pet.name, app->pet.level, app->pet.health);
-        canvas_draw_str(canvas, 2, 60, stats);
-        
-        // Add a hint for the user
-        canvas_draw_str(canvas, 80, 10, "2x BACK to exit");
-    }
-
-    furi_mutex_release(app->mutex);
+    canvas_draw_str(canvas, 2, 12, "NURSERY");
+    canvas_draw_xbm(canvas, 48, 22, 16, 16, yeti_sprite);
+    
+    canvas_set_font(canvas, FontSecondary);
+    char stats[64];
+    snprintf(stats, sizeof(stats), "LVL: %d | HP: %d", pet->level, pet->health);
+    canvas_draw_str(canvas, 2, 54, stats);
+    canvas_draw_str(canvas, 2, 63, "Press BACK to Menu");
 }
 
-// --- Hardware Hook: NFC Scavenge ---
-void scavenge_nfc(FlipperMonApp* app) {
-    // The compiler suggested this exact name!
-    if(furi_hal_nfc_field_is_present()) { 
-        app->pet.level++;
-        notification_message(app->notify, &sequence_success);
-    } else {
-        // Blink yellow if no card found
-        notification_message(app->notify, &sequence_blink_yellow_100);
-    }
-}
+typedef enum {
+    FlipperMonMenuNursery,
+    FlipperMonMenuScavenge,
+    FlipperMonMenuAttack,
+} FlipperMonMenuIndex;
 
-// --- Hardware Hook: IR Attack ---
-void send_ir_attack(FlipperMonApp* app) {
-    // To ensure this compiles, we use the most basic HAL toggle.
-    // This turns on the IR LED carrier, waits, then turns it off.
-    if(!furi_hal_infrared_is_busy()) {
+void flippermon_menu_callback(void* context, uint32_t index) {
+    FlipperMonApp* app = context;
+    if(index == FlipperMonMenuNursery) {
+        app->current_view = FlipperMonViewNursery;
+        view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewNursery);
+    } else if(index == FlipperMonMenuScavenge) {
+        if(furi_hal_nfc_field_is_present()) {
+            app->pet.level++;
+            notification_message(app->notify, &sequence_success);
+        } else {
+            notification_message(app->notify, &sequence_blink_yellow_100);
+        }
+    } else if(index == FlipperMonMenuAttack) {
+        // We go back to the most stable IR toggle for 2026
         furi_hal_infrared_set_tx_output(true);
         furi_delay_ms(50);
         furi_hal_infrared_set_tx_output(false);
-        
         notification_message(app->notify, &sequence_blink_red_100);
     }
 }
-// --- SubGHZ scavenge 
-void scavenge_subghz(FlipperMonApp* app) {
-    // Check if the Sub-GHz radio is picking up background noise/signals
-    // furi_hal_subghz_get_rssi() returns the Signal Strength
-    float rssi = furi_hal_subghz_get_rssi();
 
-    // If signal is stronger than -90dBm, your pet "eats" the radio waves
-    if(rssi > -90.0f) {
-        if(app->pet.energy < 100) app->pet.energy += 5;
-        notification_message(app->notify, &sequence_blink_blue_100);
+// Navigation Callback must return BOOL
+// True = Event handled, False = Pass to system (which usually exits)
+bool flippermon_back_event_callback(void* context) {
+    FlipperMonApp* app = context;
+    if(app->current_view == FlipperMonViewNursery) {
+        app->current_view = FlipperMonViewSubmenu;
+        view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
+        return true; 
     }
+    return false; // This will trigger the app exit
 }
 
-// --- Main App Entry ---
 int32_t flippermon_app(void* p) {
     UNUSED(p);
-    FuriMessageQueue* event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
     FlipperMonApp* app = malloc(sizeof(FlipperMonApp));
-    
-    app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
-    app->state = StateNursery;
     app->notify = furi_record_open(RECORD_NOTIFICATION);
-    
-    // Initial Stats
     app->pet.health = 100;
     app->pet.level = 1;
-    strncpy(app->pet.name, "YETI", 12);
+    app->current_view = FlipperMonViewSubmenu;
 
-    ViewPort* view_port = view_port_alloc();
-    view_port_draw_callback_set(view_port, render_callback, app);
-    view_port_input_callback_set(view_port, (void*)furi_message_queue_put, event_queue);
+    app->view_dispatcher = view_dispatcher_alloc();
+    view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
+    view_dispatcher_set_navigation_event_callback(app->view_dispatcher, flippermon_back_event_callback);
+
+    app->submenu = submenu_alloc();
+    submenu_set_header(app->submenu, "Flipper-Mon");
+    submenu_add_item(app->submenu, "Nursery", FlipperMonMenuNursery, flippermon_menu_callback, app);
+    submenu_add_item(app->submenu, "NFC Scavenge", FlipperMonMenuScavenge, flippermon_menu_callback, app);
+    submenu_add_item(app->submenu, "IR Attack", FlipperMonMenuAttack, flippermon_menu_callback, app);
+    view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewSubmenu, submenu_get_view(app->submenu));
+
+    app->nursery_view = view_alloc();
+    view_set_draw_callback(app->nursery_view, nursery_draw_callback);
+    view_set_context(app->nursery_view, &app->pet);
+    view_dispatcher_add_view(app->view_dispatcher, FlipperMonViewNursery, app->nursery_view);
 
     Gui* gui = furi_record_open(RECORD_GUI);
-    gui_add_view_port(gui, view_port, GuiLayerFullscreen);
+    view_dispatcher_attach_to_gui(app->view_dispatcher, gui, ViewDispatcherTypeFullscreen);
+    view_dispatcher_switch_to_view(app->view_dispatcher, FlipperMonViewSubmenu);
 
-    InputEvent event;
-    while(furi_message_queue_get(event_queue, &event, FuriWaitForever) == FuriStatusOk) {
-        if(event.type == InputTypeShort) {
-            // --- NEW DOUBLE-BACK EXIT LOGIC ---
-            if(event.key == InputKeyBack) {
-                uint32_t current_tick = furi_get_tick();
-                // Check if the last press was within 300ms
-                if(current_tick - app->last_back_press < 300) {
-                    break; // EXIT THE WHILE LOOP AND CLOSE APP
-                } else {
-                    app->last_back_press = current_tick;
-                    // Optional: Give a small vibration or hint to the user
-                    notification_message(app->notify, &sequence_error); 
-                }
-            }
-            
-            // --- YOUR OTHER CONTROLS ---
-            if(event.key == InputKeyOk) scavenge_nfc(app);
-            if(event.key == InputKeyUp) send_ir_attack(app);
-        }
-        view_port_update(view_port);
-    }
+    view_dispatcher_run(app->view_dispatcher);
 
     // Cleanup
-    gui_remove_view_port(gui, view_port);
-    view_port_free(view_port);
-    furi_message_queue_free(event_queue);
+    view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewSubmenu);
+    view_dispatcher_remove_view(app->view_dispatcher, FlipperMonViewNursery);
+    submenu_free(app->submenu);
+    view_free(app->nursery_view);
+    view_dispatcher_free(app->view_dispatcher);
     furi_record_close(RECORD_GUI);
     furi_record_close(RECORD_NOTIFICATION);
-    furi_mutex_free(app->mutex);
     free(app);
+
     return 0;
 }
